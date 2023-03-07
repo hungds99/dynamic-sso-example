@@ -9,6 +9,7 @@ const GoogleStrategy = require('passport-google-oauth').OAuth2Strategy;
 const SamlStrategy = require('passport-saml').Strategy;
 
 const multipass = require('./utils/multipass');
+const { createMySQLConnection } = require('./utils/dbconnection');
 
 // init app
 const app = express();
@@ -30,7 +31,7 @@ app.use(
     resave: false,
     saveUninitialized: true,
     secret: process.env.SESSION_SECRET,
-    cookie: { secure: true },
+    cookie: { secure: true, maxAge: 300 },
   })
 );
 
@@ -68,7 +69,21 @@ const GOOGLE_AUTH_CONFIG = {
 };
 
 app.get('/', function (req, res) {
-  res.render('pages/index');
+  console.log('req.session: ', req.session);
+  if (req.session.email) {
+    // Generate a Shopify multipass URL to your shop
+    // const url = multipass.generateUrl({
+    //   email: req.session.email,
+    // });
+
+    // return res.redirect(url);
+    return res.redirect('/auth');
+  }
+  return res.render('pages/index');
+});
+
+app.get('/auth', function (req, res) {
+  return res.render('pages/auth');
 });
 
 const passportRegister = (name, strategy, options) => {
@@ -98,6 +113,60 @@ app.get('/auth/login/:method', function (req, res, next) {
         return done(null, profile);
       })
     )(req, res, next);
+  }
+});
+
+app.post('/auth/login/:method', function (req, res, next) {
+  // Request parameter is passed in as a string
+  const method = req.params.method;
+
+  // Login with custom database method
+  if (method === 'database') {
+    // Create connection to database
+    const databaseConfig = {
+      host: process.env.DATABASE_HOST,
+      port: process.env.DATABASE_PORT,
+      user: process.env.DATABASE_USER,
+      password: process.env.DATABASE_PASSWORD,
+      database: process.env.DATABASE_NAME,
+    };
+
+    let connection = null;
+    try {
+      connection = createMySQLConnection(
+        databaseConfig.host,
+        databaseConfig.user,
+        databaseConfig.password,
+        databaseConfig.database
+      );
+
+      // // Get user from database
+      const query = `SELECT * FROM users`;
+      connection.query(query, function (error, results, fields) {
+        if (error) {
+          console.error('Error connecting to database: ', error);
+        }
+        // console.log('results: ', { results, fields });
+      });
+    } catch (error) {
+      console.error('Error connecting to database: ', error);
+    }
+
+    // regenerate the session, which is good practice to help
+    // guard against forms of session fixation
+    req.session.regenerate(function (err) {
+      if (err) next(err);
+
+      // store user information in session, typically a user id
+      req.session.email = 'dinhsyhung@gmail.com';
+
+      // save the session before redirection to ensure page
+      // load does not happen before session is saved
+      req.session.save(function (err) {
+        if (err) return next(err);
+        return res.render('pages/auth');
+      });
+    });
   }
 });
 
