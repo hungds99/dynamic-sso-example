@@ -3,10 +3,12 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const session = require('express-session');
+const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth').OAuth2Strategy;
 const SamlStrategy = require('passport-saml').Strategy;
+const LocalStrategy = require('passport-local').Strategy;
 
 const multipass = require('./utils/multipass');
 const { createMySQLConnection } = require('./utils/dbconnection');
@@ -14,33 +16,11 @@ const { createMySQLConnection } = require('./utils/dbconnection');
 // init app
 const app = express();
 
-// set up view engine
-app.set('view engine', 'ejs');
+app.use(cookieParser()); // read cookies (needed for auth)
+app.use(bodyParser.json()); // get information from html forms
+app.use(bodyParser.urlencoded({ extended: true }));
 
-// parse application/x-www-form-urlencoded
-app.use(bodyParser.urlencoded({ extended: false }));
-// parse application/json
-app.use(bodyParser.json());
-
-// set up passport
-app.use(passport.initialize());
-
-// set up session
-app.use(
-  session({
-    resave: false,
-    saveUninitialized: true,
-    secret: process.env.SESSION_SECRET,
-    cookie: { secure: true, maxAge: 300 },
-  })
-);
-
-passport.serializeUser(function (user, cb) {
-  cb(null, user);
-});
-passport.deserializeUser(function (obj, cb) {
-  cb(null, obj);
-});
+app.set('view engine', 'ejs'); // set up view engine
 
 // to allow CORS calls
 app.use(function (req, res, next) {
@@ -49,6 +29,24 @@ app.use(function (req, res, next) {
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.header('Access-Control-Allow-Credentials', true);
   return next();
+});
+
+// required for passport
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET, // session secret
+    resave: true,
+    saveUninitialized: true,
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session()); // persistent login sessions
+
+passport.serializeUser(function (user, cb) {
+  cb(null, user);
+});
+passport.deserializeUser(function (obj, cb) {
+  cb(null, obj);
 });
 
 // configuration constants
@@ -68,17 +66,17 @@ const GOOGLE_AUTH_CONFIG = {
   scope: ['profile', 'email'],
 };
 
-app.get('/', function (req, res) {
-  console.log('req.session: ', req.session);
-  if (req.session.email) {
-    // Generate a Shopify multipass URL to your shop
-    // const url = multipass.generateUrl({
-    //   email: req.session.email,
-    // });
-
-    // return res.redirect(url);
-    return res.redirect('/auth');
+// route middleware to ensure user is logged in
+function isLoggedIn(req, res, next) {
+  if (!req.isAuthenticated()) {
+    console.log('User is not authenticated');
+    return next();
   }
+  console.log('User is authenticated');
+  res.redirect('/auth');
+}
+
+app.get('/', isLoggedIn, function (req, res) {
   return res.render('pages/index');
 });
 
@@ -119,54 +117,41 @@ app.get('/auth/login/:method', function (req, res, next) {
 app.post('/auth/login/:method', function (req, res, next) {
   // Request parameter is passed in as a string
   const method = req.params.method;
+  if (method === 'local') {
+    return passportRegister(
+      'local-login',
+      new LocalStrategy(
+        {
+          usernameField: 'email',
+          passwordField: 'password',
+          passReqToCallback: true,
+        },
+        function (req, email, password, done) {
+          // Validate user login
 
-  // Login with custom database method
-  if (method === 'database') {
-    // Create connection to database
-    const databaseConfig = {
-      host: process.env.DATABASE_HOST,
-      port: process.env.DATABASE_PORT,
-      user: process.env.DATABASE_USER,
-      password: process.env.DATABASE_PASSWORD,
-      database: process.env.DATABASE_NAME,
-    };
+          // Get user from database
+          //
 
-    let connection = null;
-    try {
-      connection = createMySQLConnection(
-        databaseConfig.host,
-        databaseConfig.user,
-        databaseConfig.password,
-        databaseConfig.database
-      );
+          // Verify user password by hashing
+          //
 
-      // // Get user from database
-      const query = `SELECT * FROM users`;
-      connection.query(query, function (error, results, fields) {
-        if (error) {
-          console.error('Error connecting to database: ', error);
+          const user = {
+            email: 'dinhsyhung99@gmail.com',
+            passport: '123456',
+          }; // For dummy
+
+          // Check if user exists
+          if (user.email === email) {
+            return done(null, { email });
+          }
+          return done(null, false);
         }
-        // console.log('results: ', { results, fields });
-      });
-    } catch (error) {
-      console.error('Error connecting to database: ', error);
-    }
-
-    // regenerate the session, which is good practice to help
-    // guard against forms of session fixation
-    req.session.regenerate(function (err) {
-      if (err) next(err);
-
-      // store user information in session, typically a user id
-      req.session.email = 'dinhsyhung@gmail.com';
-
-      // save the session before redirection to ensure page
-      // load does not happen before session is saved
-      req.session.save(function (err) {
-        if (err) return next(err);
-        return res.render('pages/auth');
-      });
-    });
+      ),
+      {
+        successRedirect: '/auth',
+        failureRedirect: '/',
+      }
+    )(req, res, next);
   }
 });
 
